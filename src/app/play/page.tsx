@@ -75,6 +75,56 @@ function PlayPageClient() {
   const [reverseEpisodeOrder, setReverseEpisodeOrder] = useState(false);
   const shortcutHintTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // NEW STATE: 控制快进/快退按钮是否显示
+  const [showSkipButtons, setShowSkipButtons] = useState(true);
+
+  // 使用 ResizeObserver 根据 MediaPlayer 元素尺寸动态决定按钮显隐
+  useEffect(() => {
+    if (
+      typeof window === 'undefined' ||
+      typeof ResizeObserver === 'undefined'
+    ) {
+      return;
+    }
+
+    const updateShowSkipButtons = () => {
+      const el: HTMLElement | undefined = (playerRef.current as any)?.el;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      // width < 576 或 height < 380 时隐藏
+      setShowSkipButtons(!(rect.width < 576 || rect.height < 380));
+    };
+
+    // 尝试立即更新一次
+    updateShowSkipButtons();
+
+    const observer = new ResizeObserver(updateShowSkipButtons);
+    // 有可能此时 el 还未就绪，使用轮询确保绑定
+    let retryTimer: NodeJS.Timeout | null = null;
+    const attachObserver = () => {
+      const el: HTMLElement | undefined = (playerRef.current as any)?.el;
+      if (el) {
+        observer.observe(el);
+        if (retryTimer) clearInterval(retryTimer);
+      }
+    };
+
+    attachObserver();
+    if (!(playerRef.current as any)?.el) {
+      // 如果首次未获取到 el，继续重试直至获取
+      retryTimer = setInterval(attachObserver, 200);
+    }
+
+    // orientationchange 也可能影响高/宽
+    window.addEventListener('orientationchange', updateShowSkipButtons);
+
+    return () => {
+      observer.disconnect();
+      if (retryTimer) clearInterval(retryTimer);
+      window.removeEventListener('orientationchange', updateShowSkipButtons);
+    };
+  }, []);
+
   // 换源相关状态
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -123,13 +173,13 @@ function PlayPageClient() {
   // 上次使用的音量，默认 0.7
   const lastVolumeRef = useRef<number>(0.7);
 
-  // 新增：去广告开关（从 localStorage 继承，默认取环境变量）
+  // 新增：去广告开关（从 localStorage 继承，默认 true）
   const [blockAdEnabled, _setBlockAdEnabled] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const v = localStorage.getItem('enable_blockad');
       if (v !== null) return v === 'true';
     }
-    return process.env.NEXT_PUBLIC_ENABLE_BLOCKAD === 'true';
+    return true;
   });
 
   // 同步最新值到 refs
@@ -494,7 +544,12 @@ function PlayPageClient() {
             result.title.toLowerCase() === videoTitle.toLowerCase() &&
             (videoYear
               ? result.year.toLowerCase() === videoYear.toLowerCase()
-              : true)
+              : true) &&
+            detailRef.current?.episodes.length &&
+            ((detailRef.current?.episodes.length === 1 &&
+              result.episodes.length === 1) ||
+              (detailRef.current?.episodes.length > 1 &&
+                result.episodes.length > 1))
         );
 
         if (exactMatch) {
@@ -1190,24 +1245,6 @@ function PlayPageClient() {
         // 调用父类构造函数
         // @ts-ignore
         super(config);
-
-        // 监听 Hls 错误事件，捕获 bufferStalledError 并尝试跳过
-        this.on(Hls.Events.ERROR, (_evt: any, data: any) => {
-          if (
-            data?.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR ||
-            data?.details === Hls.ErrorDetails.BUFFER_SEEK_OVER_HOLE
-          ) {
-            try {
-              const media = (this as any).media as HTMLMediaElement | undefined;
-              if (media && !media.seeking) {
-                // 前跳 1 秒，跳过当前卡顿的分片
-                media.currentTime = media.currentTime + 1;
-              }
-            } catch (err) {
-              console.warn('尝试跳过卡顿分片失败:', err);
-            }
-          }
-        });
       }
 
       attachMedia(media: HTMLMediaElement): void {
@@ -1293,18 +1330,8 @@ function PlayPageClient() {
           onClick={handleForceLandscape}
           className='fixed bottom-16 left-4 z-[85] w-10 h-10 rounded-full bg-gray-800 text-white flex items-center justify-center md:hidden'
         >
-          <svg
-            className='w-6 h-6'
-            fill='none'
-            stroke='currentColor'
-            viewBox='0 0 24 24'
-          >
-            <path
-              strokeLinecap='round'
-              strokeLinejoin='round'
-              strokeWidth={2}
-              d='M3 18v-6a3 3 0 013-3h12M21 6v6a3 3 0 01-3 3H6'
-            />
+          <svg className='w-5 h-5' viewBox='0 0 1024 1024' fill='currentColor'>
+            <path d='M298.666667 469.333333h597.333333c46.933333 0 85.333333 38.4 85.333333 85.333334v341.333333c0 46.933333-38.4 85.333333-85.333333 85.333333H298.666667c-46.933333 0-85.333333-38.4-85.333334-85.333333v-341.333333c0-46.933333 38.4-85.333333 85.333334-85.333334z m0 85.333334v341.333333h597.333333v-341.333333H298.666667z m170.666666-512c46.933333 0 85.333333 38.4 85.333334 85.333333v298.666667h-85.333334V128H128v597.333333h42.666667v85.333334H128c-46.933333 0-85.333333-38.4-85.333333-85.333334V128c0-46.933333 38.4-85.333333 85.333333-85.333333h341.333333z m115.2 42.666666c128 0 238.933333 89.6 268.8 213.333334v4.266666l46.933334-51.2L951.466667 298.666667 853.333333 396.8c-17.066667 21.333333-51.2 8.533333-55.466666-17.066667V366.933333c0-115.2-89.6-213.333333-204.8-217.6h-8.533334V85.333333z' />
           </svg>
         </button>
       )}
@@ -1358,26 +1385,57 @@ function PlayPageClient() {
             settingsMenu: null,
             captionButton: null,
             airPlayButton: null, // 隐藏默认 AirPlay 按钮
-            beforeCurrentTime:
-              totalEpisodes > 1 ? (
-                // 下一集按钮放在时间显示前
-                <button
-                  className='vds-button mr-2'
-                  onClick={handleNextEpisode}
-                  aria-label='Next Episode'
-                >
-                  <svg
-                    className='vds-icon'
-                    viewBox='0 0 32 32'
-                    xmlns='http://www.w3.org/2000/svg'
+            beforeCurrentTime: (
+              <>
+                {/* 快进 10 秒按钮 - 根据播放器尺寸决定显隐 */}
+                {showSkipButtons && (
+                  <button
+                    className='vds-button mr-2'
+                    onClick={() => {
+                      if (playerRef.current) {
+                        const p = playerRef.current;
+                        const newTime = Math.min(
+                          (p.currentTime || 0) + 10,
+                          p.duration || 0
+                        );
+                        p.currentTime = newTime;
+                      }
+                    }}
+                    aria-label='Fast Forward 10 Seconds'
                   >
-                    <path
-                      d='M6 24l12-8L6 8v16zM22 8v16h3V8h-3z'
-                      fill='currentColor'
-                    />
-                  </svg>
-                </button>
-              ) : null,
+                    <svg
+                      className='vds-icon'
+                      viewBox='0 0 32 32'
+                      xmlns='http://www.w3.org/2000/svg'
+                    >
+                      {/* 双三角快进图标 */}
+                      <path d='M6 24l10-8L6 8v16z' fill='currentColor' />
+                      <path d='M18 24l10-8-10-8v16z' fill='currentColor' />
+                    </svg>
+                  </button>
+                )}
+
+                {totalEpisodes > 1 && (
+                  // 下一集按钮放在时间显示前
+                  <button
+                    className='vds-button mr-2'
+                    onClick={handleNextEpisode}
+                    aria-label='Next Episode'
+                  >
+                    <svg
+                      className='vds-icon'
+                      viewBox='0 0 32 32'
+                      xmlns='http://www.w3.org/2000/svg'
+                    >
+                      <path
+                        d='M6 24l12-8L6 8v16zM22 8v16h3V8h-3z'
+                        fill='currentColor'
+                      />
+                    </svg>
+                  </button>
+                )}
+              </>
+            ),
             beforeFullscreenButton: (
               <>
                 <button
@@ -1401,6 +1459,34 @@ function PlayPageClient() {
                 <AirPlayButton className='vds-button'>
                   <AirPlayIcon className='vds-icon' />
                 </AirPlayButton>
+              </>
+            ),
+            // 快退 10 秒按钮（根据播放器尺寸决定显隐）
+            beforePlayButton: (
+              <>
+                {showSkipButtons && (
+                  <button
+                    className='vds-button mr-2'
+                    onClick={() => {
+                      if (playerRef.current) {
+                        const p = playerRef.current;
+                        const newTime = Math.max(0, (p.currentTime || 0) - 10);
+                        p.currentTime = newTime;
+                      }
+                    }}
+                    aria-label='Rewind 10 Seconds'
+                  >
+                    <svg
+                      className='vds-icon'
+                      viewBox='0 0 32 32'
+                      xmlns='http://www.w3.org/2000/svg'
+                    >
+                      {/* 双三角快退图标 */}
+                      <path d='M26 24l-10-8 10-8v16z' fill='currentColor' />
+                      <path d='M14 24l-10-8 10-8v16z' fill='currentColor' />
+                    </svg>
+                  </button>
+                )}
               </>
             ),
           }}

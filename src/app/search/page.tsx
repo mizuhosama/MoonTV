@@ -44,7 +44,9 @@ function SearchPageClient() {
     const map = new Map<string, SearchResult[]>();
     searchResults.forEach((item) => {
       // 使用 title + year 作为键，若 year 不存在则使用 'unknown'
-      const key = `${item.title}-${item.year || 'unknown'}`;
+      const key = `${item.title}-${item.year || 'unknown'}-${
+        item.episodes.length === 1 ? 'movie' : 'tv'
+      }`;
       const arr = map.get(key) || [];
       arr.push(item);
       map.set(key, arr);
@@ -168,7 +170,10 @@ function SearchPageClient() {
                   </div>
                 </label>
               </div>
-              <div className='justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8 sm:px-4'>
+              <div
+                key={`search-results-${viewMode}`}
+                className='justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8 sm:px-4'
+              >
                 {viewMode === 'agg'
                   ? aggregatedResults.map((group) => {
                       const key = `${group[0].title}-${
@@ -196,6 +201,7 @@ function SearchPageClient() {
                           episodes={item.episodes.length}
                           source={item.source}
                           source_name={item.source_name}
+                          douban_id={item.douban_id}
                           from='search'
                         />
                       </div>
