@@ -27,8 +27,7 @@ async function refreshRecordAndFavorites() {
         promise = fetchVideoDetail({
           source,
           id,
-          fallbackTitle,
-          fallbackYear: '',
+          fallbackTitle: fallbackTitle.trim(),
         });
         detailCache.set(key, promise);
       }

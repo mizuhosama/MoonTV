@@ -8,8 +8,16 @@ import {
   isHLSProvider,
   MediaPlayer,
   MediaProvider,
+  Menu,
+  RadioGroup,
+  SeekButton,
 } from '@vidstack/react';
-import { AirPlayIcon } from '@vidstack/react/icons';
+import {
+  AirPlayIcon,
+  CheckIcon,
+  SeekBackward10Icon,
+  SeekForward10Icon,
+} from '@vidstack/react/icons';
 import {
   defaultLayoutIcons,
   DefaultVideoLayout,
@@ -33,7 +41,10 @@ import {
   savePlayRecord,
   toggleFavorite,
 } from '@/lib/db.client';
-import { type VideoDetail, fetchVideoDetail } from '@/lib/fetchVideoDetail';
+import {
+  type VideoDetail,
+  fetchVideoDetail,
+} from '@/lib/fetchVideoDetail.client';
 import { SearchResult } from '@/lib/types';
 
 // 扩展 HTMLVideoElement 类型以支持 hls 属性
@@ -182,6 +193,12 @@ function PlayPageClient() {
     return true;
   });
 
+  // 长按三倍速相关
+  const longPressTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const normalPlaybackRateRef = useRef<number>(1);
+  // 标记长按是否已生效
+  const longPressActiveRef = useRef<boolean>(false);
+
   // 同步最新值到 refs
   useEffect(() => {
     currentSourceRef.current = currentSource;
@@ -262,7 +279,7 @@ function PlayPageClient() {
         const detailData = await fetchVideoDetail({
           source: currentSource,
           id: currentId,
-          fallbackTitle: videoTitle,
+          fallbackTitle: videoTitle.trim(),
           fallbackYear: videoYear,
         });
 
@@ -385,6 +402,10 @@ function PlayPageClient() {
         }
       }, 0);
     }
+
+    // 绑定长按三倍速事件
+    playerRef.current?.addEventListener('touchstart', handleLongPressStart);
+    playerRef.current?.addEventListener('touchend', handleLongPressEnd);
   };
 
   const onEnded = () => {
@@ -443,6 +464,9 @@ function PlayPageClient() {
       }
       if (saveIntervalRef.current) {
         clearInterval(saveIntervalRef.current);
+      }
+      if (longPressTimeoutRef.current) {
+        clearTimeout(longPressTimeoutRef.current);
       }
     };
   }, []);
@@ -512,7 +536,7 @@ function PlayPageClient() {
 
     try {
       const response = await fetch(
-        `/api/search?q=${encodeURIComponent(query)}`
+        `/api/search?q=${encodeURIComponent(query.trim())}`
       );
       if (!response.ok) {
         throw new Error('搜索失败');
@@ -595,7 +619,7 @@ function PlayPageClient() {
       const newDetail = await fetchVideoDetail({
         source: newSource,
         id: newId,
-        fallbackTitle: newTitle,
+        fallbackTitle: newTitle.trim(),
         fallbackYear: videoYear,
       });
 
@@ -1023,6 +1047,44 @@ function PlayPageClient() {
     }
   };
 
+  // 长按三倍速处理
+  const handleLongPressStart = (e: TouchEvent) => {
+    if (playerRef.current?.paused || playerRef.current?.playbackRate === 3.0) {
+      return;
+    }
+    const target = e.target as HTMLElement;
+    if (
+      target.closest('.custom_topbar') ||
+      target.closest('.custom_episodes_panel') ||
+      target.closest('.custom_source_panel')
+    ) {
+      return;
+    }
+    if (longPressTimeoutRef.current) {
+      clearTimeout(longPressTimeoutRef.current);
+    }
+    longPressTimeoutRef.current = setTimeout(() => {
+      if (playerRef.current) {
+        normalPlaybackRateRef.current = playerRef.current.playbackRate || 1;
+        playerRef.current.playbackRate = 3.0;
+        longPressActiveRef.current = true; // 记录长按已激活
+        displayShortcutHint('3倍速', 'play');
+      }
+    }, 300); // 按压 300ms 触发
+  };
+
+  const handleLongPressEnd = () => {
+    if (longPressTimeoutRef.current) {
+      clearTimeout(longPressTimeoutRef.current);
+      longPressTimeoutRef.current = null;
+    }
+    // 只有在长按激活过且当前倍速为 3.0 时才恢复，防止误触
+    if (playerRef.current && longPressActiveRef.current) {
+      playerRef.current.playbackRate = normalPlaybackRateRef.current || 1;
+      longPressActiveRef.current = false;
+    }
+  };
+
   if (loading) {
     return (
       <div className='min-h-[100dvh] bg-black flex items-center justify-center overflow-hidden overscroll-contain'>
@@ -1046,7 +1108,7 @@ function PlayPageClient() {
             onClick={() => {
               if (videoTitle) {
                 window.location.href = `/aggregate?q=${encodeURIComponent(
-                  videoTitle
+                  videoTitle.trim()
                 )}${videoYear ? `&year=${encodeURIComponent(videoYear)}` : ''}`;
               } else {
                 window.location.href = '/';
@@ -1071,7 +1133,7 @@ function PlayPageClient() {
               // 返回选源页
               if (videoTitle) {
                 window.location.href = `/aggregate?q=${encodeURIComponent(
-                  videoTitle
+                  videoTitle.trim()
                 )}${videoYear ? `&year=${encodeURIComponent(videoYear)}` : ''}`;
               } else {
                 window.location.href = '/';
@@ -1106,7 +1168,7 @@ function PlayPageClient() {
     return (
       <div
         data-top-bar
-        className='absolute top-0 left-0 right-0 transition-opacity duration-300 z-10 opacity-0 pointer-events-none group-data-[controls]:opacity-100 group-data-[controls]:pointer-events-auto'
+        className='absolute custom_topbar top-0 left-0 right-0 transition-opacity duration-300 z-10 opacity-0 pointer-events-none group-data-[controls]:opacity-100 group-data-[controls]:pointer-events-auto'
       >
         <div className='bg-black/60 backdrop-blur-sm px-0 sm:px-6 py-4 relative flex items-center sm:justify-center'>
           {/* 返回按钮 */}
@@ -1379,42 +1441,14 @@ function PlayPageClient() {
         />
         <DefaultVideoLayout
           icons={defaultLayoutIcons}
+          noGestures={true}
           slots={{
             googleCastButton: null,
-            pipButton: null,
             settingsMenu: null,
             captionButton: null,
             airPlayButton: null, // 隐藏默认 AirPlay 按钮
             beforeCurrentTime: (
               <>
-                {/* 快进 10 秒按钮 - 根据播放器尺寸决定显隐 */}
-                {showSkipButtons && (
-                  <button
-                    className='vds-button mr-2'
-                    onClick={() => {
-                      if (playerRef.current) {
-                        const p = playerRef.current;
-                        const newTime = Math.min(
-                          (p.currentTime || 0) + 10,
-                          p.duration || 0
-                        );
-                        p.currentTime = newTime;
-                      }
-                    }}
-                    aria-label='Fast Forward 10 Seconds'
-                  >
-                    <svg
-                      className='vds-icon'
-                      viewBox='0 0 32 32'
-                      xmlns='http://www.w3.org/2000/svg'
-                    >
-                      {/* 双三角快进图标 */}
-                      <path d='M6 24l10-8L6 8v16z' fill='currentColor' />
-                      <path d='M18 24l10-8-10-8v16z' fill='currentColor' />
-                    </svg>
-                  </button>
-                )}
-
                 {totalEpisodes > 1 && (
                   // 下一集按钮放在时间显示前
                   <button
@@ -1454,7 +1488,10 @@ function PlayPageClient() {
                 >
                   <AdBlockIcon enabled={blockAdEnabled} />
                 </button>
-                <PlaybackRateButton playerRef={playerRef} />
+                <PlaybackRateButton
+                  playerRef={playerRef}
+                  playerContainerRef={playerContainerRef}
+                />
                 {/* 自定义 AirPlay 按钮 */}
                 <AirPlayButton className='vds-button'>
                   <AirPlayIcon className='vds-icon' />
@@ -1465,27 +1502,18 @@ function PlayPageClient() {
             beforePlayButton: (
               <>
                 {showSkipButtons && (
-                  <button
-                    className='vds-button mr-2'
-                    onClick={() => {
-                      if (playerRef.current) {
-                        const p = playerRef.current;
-                        const newTime = Math.max(0, (p.currentTime || 0) - 10);
-                        p.currentTime = newTime;
-                      }
-                    }}
-                    aria-label='Rewind 10 Seconds'
-                  >
-                    <svg
-                      className='vds-icon'
-                      viewBox='0 0 32 32'
-                      xmlns='http://www.w3.org/2000/svg'
-                    >
-                      {/* 双三角快退图标 */}
-                      <path d='M26 24l-10-8 10-8v16z' fill='currentColor' />
-                      <path d='M14 24l-10-8 10-8v16z' fill='currentColor' />
-                    </svg>
-                  </button>
+                  <SeekButton className='vds-button' seconds={-10}>
+                    <SeekBackward10Icon className='vds-icon' />
+                  </SeekButton>
+                )}
+              </>
+            ),
+            afterPlayButton: (
+              <>
+                {showSkipButtons && (
+                  <SeekButton className='vds-button' seconds={10}>
+                    <SeekForward10Icon className='vds-icon' />
+                  </SeekButton>
                 )}
               </>
             ),
@@ -1508,7 +1536,7 @@ function PlayPageClient() {
 
             {/* 侧拉面板 */}
             <div
-              className={`fixed top-0 right-0 h-full w-full mobile-landscape:w-1/2 md:w-80 bg-black/40 backdrop-blur-xl z-[110] transform transition-transform duration-300 ${
+              className={`fixed custom_episodes_panel top-0 right-0 h-full w-full mobile-landscape:w-1/2 md:w-80 bg-black/40 backdrop-blur-xl z-[110] transform transition-transform duration-300 ${
                 showEpisodePanel ? 'translate-x-0' : 'translate-x-full'
               }`}
             >
@@ -1600,7 +1628,7 @@ function PlayPageClient() {
 
           {/* 侧拉面板 */}
           <div
-            className={`fixed top-0 right-0 h-full w-full mobile-landscape:w-1/2 md:w-96 bg-black/40 backdrop-blur-xl z-[110] transform transition-transform duration-300 ${
+            className={`fixed custom_source_panel top-0 right-0 h-full w-full mobile-landscape:w-1/2 md:w-96 bg-black/40 backdrop-blur-xl z-[110] transform transition-transform duration-300 ${
               showSourcePanel ? 'translate-x-0' : 'translate-x-full'
             }`}
           >
@@ -1817,8 +1845,10 @@ function PlayPageClient() {
 
 const PlaybackRateButton = ({
   playerRef,
+  playerContainerRef,
 }: {
   playerRef: React.RefObject<any>;
+  playerContainerRef: React.RefObject<HTMLDivElement>;
 }) => {
   const [rate, setRate] = useState(1);
   const rates = [0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
@@ -1833,18 +1863,38 @@ const PlaybackRateButton = ({
     return unsubscribe;
   }, [playerRef]);
 
-  const cycleRate = () => {
-    const player = playerRef.current;
-    if (!player) return;
-    const currentIndex = rates.indexOf(rate);
-    const nextIndex = (currentIndex + 1) % rates.length;
-    player.playbackRate = rates[nextIndex];
-  };
-
   return (
-    <button className='vds-button' onClick={cycleRate}>
-      {rate === 1 ? '倍速' : `${rate.toFixed(2)}x`}
-    </button>
+    <Menu.Root className='vds-menu'>
+      <Menu.Button className='vds-menu-button vds-button' aria-label='Settings'>
+        <span>倍速</span>
+      </Menu.Button>
+      <Menu.Items className='vds-menu-items' placement='top' offset={0}>
+        <RadioGroup.Root
+          className='vds-radio-group'
+          aria-label='Custom Options'
+          value={rate.toString()}
+          onChange={(value: string) => {
+            const player = playerRef.current;
+            if (!player) {
+              return;
+            }
+            player.playbackRate = Number(value);
+            playerContainerRef.current?.focus();
+          }}
+        >
+          {[...rates].reverse().map((rate) => (
+            <RadioGroup.Item
+              className='vds-radio'
+              value={rate.toString()}
+              key={rate}
+            >
+              <CheckIcon className='vds-icon' />
+              <span className='vds-radio-label'>{rate}</span>
+            </RadioGroup.Item>
+          ))}
+        </RadioGroup.Root>
+      </Menu.Items>
+    </Menu.Root>
   );
 };
 
@@ -1857,7 +1907,7 @@ const FavoriteIcon = ({ filled }: { filled: boolean }) => {
         xmlns='http://www.w3.org/2000/svg'
       >
         <path
-          d='M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z'
+          d='M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.41-1.41L7.83 13H20v-2z'
           fill='#ef4444' /* Tailwind red-500 */
           stroke='#ef4444'
           strokeWidth='2'
@@ -1872,7 +1922,6 @@ const FavoriteIcon = ({ filled }: { filled: boolean }) => {
 
 // 新增：去广告图标组件
 const AdBlockIcon = ({ enabled }: { enabled: boolean }) => {
-  const color = enabled ? '#22c55e' : '#ffffff'; // Tailwind green-500 or white
   return (
     <svg
       className='h-6 w-6 vds-icon' // 略微放大尺寸
@@ -1887,20 +1936,21 @@ const AdBlockIcon = ({ enabled }: { enabled: boolean }) => {
         fontWeight='bold'
         textAnchor='middle'
         dominantBaseline='middle'
-        fill={color}
+        fill='#ffffff'
       >
         AD
       </text>
-      {/* 斜线 */}
-      <line
-        x1='4'
-        y1='4'
-        x2='28'
-        y2='28'
-        stroke={color}
-        strokeWidth='4'
-        strokeLinecap='round'
-      />
+      {enabled && (
+        <line
+          x1='4'
+          y1='4'
+          x2='28'
+          y2='28'
+          stroke='#ffffff'
+          strokeWidth='4'
+          strokeLinecap='round'
+        />
+      )}
     </svg>
   );
 };

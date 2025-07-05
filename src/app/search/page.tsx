@@ -3,7 +3,7 @@
 
 import { Search, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 
 import {
   addSearchHistory,
@@ -27,23 +27,20 @@ function SearchPageClient() {
   const [isLoading, setIsLoading] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // 视图模式：聚合(agg) 或 全部(all)，默认值由环境变量 NEXT_PUBLIC_AGGREGATE_SEARCH_RESULT 决定
-  const [viewMode, setViewMode] = useState<'agg' | 'all'>(() => {
-    const envVal = process.env.NEXT_PUBLIC_AGGREGATE_SEARCH_RESULT;
-    // 默认聚合（'agg'）。当显式设置为 'false' 或 '0' 时使用 'all'
-    if (envVal === 'false' || envVal === '0') {
-      return 'all';
-    }
-    return 'agg';
-  });
+  const [viewMode, setViewMode] = useState<'agg' | 'all'>(
+    process.env.NEXT_PUBLIC_AGGREGATE_SEARCH_RESULT === 'false' ||
+      process.env.NEXT_PUBLIC_AGGREGATE_SEARCH_RESULT === '0'
+      ? 'all'
+      : 'agg'
+  );
 
   // 聚合后的结果（按标题和年份分组）
   const aggregatedResults = useMemo(() => {
     const map = new Map<string, SearchResult[]>();
     searchResults.forEach((item) => {
-      // 使用 title + year 作为键，若 year 不存在则使用 'unknown'
+      // 使用 title + year + type 作为键，若 year 不存在则使用 'unknown'
       const key = `${item.title}-${item.year || 'unknown'}-${
         item.episodes.length === 1 ? 'movie' : 'tv'
       }`;
@@ -51,20 +48,19 @@ function SearchPageClient() {
       arr.push(item);
       map.set(key, arr);
     });
-    return Array.from(map.values());
+    return Array.from(map.entries()).sort((a, b) => {
+      return a[1][0].year === b[1][0].year
+        ? a[0].localeCompare(b[0])
+        : a[1][0].year > b[1][0].year
+        ? -1
+        : 1;
+    });
   }, [searchResults]);
 
   useEffect(() => {
-    // 自动聚焦搜索框：仅当 URL 中没有搜索参数时
-    if (!searchParams.get('q')) {
-      searchInputRef.current?.focus();
-    }
-
-    // 加载搜索历史
-    (async () => {
-      const history = await getSearchHistory();
-      setSearchHistory(history);
-    })();
+    // 无搜索参数时聚焦搜索框
+    !searchParams.get('q') && document.getElementById('searchInput')?.focus();
+    getSearchHistory().then(setSearchHistory);
   }, []);
 
   useEffect(() => {
@@ -88,10 +84,18 @@ function SearchPageClient() {
     try {
       setIsLoading(true);
       const response = await fetch(
-        `/api/search?q=${encodeURIComponent(query)}`
+        `/api/search?q=${encodeURIComponent(query.trim())}`
       );
       const data = await response.json();
-      setSearchResults(data.results);
+      setSearchResults(
+        data.results.sort((a: SearchResult, b: SearchResult) => {
+          return a.year === b.year
+            ? a.title.localeCompare(b.title)
+            : a.year > b.year
+            ? -1
+            : 1;
+        })
+      );
       setShowResults(true);
     } catch (error) {
       setSearchResults([]);
@@ -102,17 +106,20 @@ function SearchPageClient() {
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!searchQuery.trim()) return;
+    const trimmed = searchQuery.trim().replace(/\s+/g, ' ');
+    if (!trimmed) return;
 
+    // 回显搜索框
+    setSearchQuery(trimmed);
     setIsLoading(true);
     setShowResults(true);
 
-    router.push(`/search?q=${encodeURIComponent(searchQuery)}`);
+    router.push(`/search?q=${encodeURIComponent(trimmed)}`);
     // 直接发请求
-    fetchSearchResults(searchQuery);
+    fetchSearchResults(trimmed);
 
     // 保存到搜索历史
-    addSearchHistory(searchQuery).then(async () => {
+    addSearchHistory(trimmed).then(async () => {
       const history = await getSearchHistory();
       setSearchHistory(history);
     });
@@ -127,7 +134,7 @@ function SearchPageClient() {
             <div className='relative'>
               <Search className='absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400 dark:text-gray-500' />
               <input
-                ref={searchInputRef}
+                id='searchInput'
                 type='text'
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -172,15 +179,12 @@ function SearchPageClient() {
               </div>
               <div
                 key={`search-results-${viewMode}`}
-                className='justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8 sm:px-4'
+                className='justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8'
               >
                 {viewMode === 'agg'
-                  ? aggregatedResults.map((group) => {
-                      const key = `${group[0].title}-${
-                        group[0].year || 'unknown'
-                      }`;
+                  ? aggregatedResults.map(([mapKey, group]) => {
                       return (
-                        <div key={`agg-${key}`} className='w-full'>
+                        <div key={`agg-${mapKey}`} className='w-full'>
                           <AggregateCard
                             items={group}
                             query={searchQuery}
@@ -236,7 +240,9 @@ function SearchPageClient() {
                     <button
                       onClick={() => {
                         setSearchQuery(item);
-                        router.push(`/search?q=${encodeURIComponent(item)}`);
+                        router.push(
+                          `/search?q=${encodeURIComponent(item.trim())}`
+                        );
                       }}
                       className='px-4 py-2 bg-gray-500/10 hover:bg-gray-300 rounded-full text-sm text-gray-700 transition-colors duration-200 dark:bg-gray-700/50 dark:hover:bg-gray-600 dark:text-gray-300'
                     >
