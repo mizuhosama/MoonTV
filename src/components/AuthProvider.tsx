@@ -58,20 +58,47 @@ export default function AuthProvider({ children }: Props) {
   // 认证状态未知时显示加载状态
   if (!isAuthenticated) {
     return (
-      <div className='relative min-h-screen flex items-center justify-center px-4 overflow-hidden'>
-        <div className='absolute top-4 right-4'>
+      <div className="flex min-h-screen items-center justify-center bg-transparent">
+        <div className="absolute right-4 top-4">
           <ThemeToggle />
         </div>
-        <div className='relative z-10 w-full max-w-md rounded-3xl bg-gradient-to-b from-white/90 via-white/70 to-white/40 dark:from-zinc-900/90 dark:via-zinc-900/70 dark:to-zinc-900/40 backdrop-blur-xl shadow-2xl p-10 dark:border dark:border-zinc-800'>
-          <h1 className='text-green-600 tracking-tight text-center text-3xl font-extrabold mb-8 bg-clip-text drop-shadow-sm'>
+        <div className="mx-auto max-w-md px-6 text-center">
+          {/* 动画认证图标 */}
+          <div className="relative mb-8">
+            <div className="relative mx-auto flex h-24 w-24 transform items-center justify-center rounded-2xl bg-gradient-to-r from-green-500 to-emerald-600 shadow-2xl transition-transform duration-300 hover:scale-105">
+              <div className="text-4xl text-white">🔐</div>
+              {/* 旋转光环 */}
+              <div className="absolute -inset-2 animate-spin rounded-2xl bg-gradient-to-r from-green-500 to-emerald-600 opacity-20"></div>
+            </div>
+
+            {/* 浮动粒子效果 */}
+            <div className="pointer-events-none absolute left-0 top-0 h-full w-full">
+              <div className="absolute left-2 top-2 h-2 w-2 animate-bounce rounded-full bg-green-400"></div>
+              <div
+                className="absolute right-4 top-4 h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400"
+                style={{ animationDelay: '0.5s' }}
+              ></div>
+              <div
+                className="absolute bottom-3 left-6 h-1 w-1 animate-bounce rounded-full bg-lime-400"
+                style={{ animationDelay: '1s' }}
+              ></div>
+            </div>
+          </div>
+
+          {/* 品牌标题 */}
+          <h1 className="mb-8 bg-clip-text text-center text-3xl font-extrabold tracking-tight text-green-600 drop-shadow-sm">
             {siteName}
           </h1>
-          <div className='flex justify-center my-10'>
-            <div className='animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-green-500' />
+
+          {/* 加载消息 */}
+          <div className="space-y-2">
+            <p className="animate-pulse text-xl font-semibold text-gray-800 dark:text-gray-200">
+              正在验证您的身份...
+            </p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              请稍候，马上就好
+            </p>
           </div>
-          <p className='text-gray-700 dark:text-gray-300 font-medium text-lg text-center'>
-            正在验证您的身份，请稍候...
-          </p>
         </div>
       </div>
     );

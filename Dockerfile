@@ -42,11 +42,14 @@ RUN addgroup -g 1001 -S nodejs && adduser -u 1001 -S nextjs -G nodejs
 
 WORKDIR /app
 ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 ENV DOCKER_ENV=true
 
 # 从构建器中复制 standalone 输出
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+# 从构建器中复制 start.js
+COPY --from=builder --chown=nextjs:nodejs /app/start.js ./start.js
 # 从构建器中复制 public 和 .next/static 目录
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
@@ -57,5 +60,5 @@ USER nextjs
 
 EXPOSE 3000
 
-# 使用 node 直接运行 server.js
-CMD ["node", "server.js"] 
+# 使用自定义启动脚本，先预加载配置再启动服务器
+CMD ["node", "start.js"] 

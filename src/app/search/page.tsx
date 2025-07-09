@@ -1,4 +1,4 @@
-/* eslint-disable react-hooks/exhaustive-deps */
+/* eslint-disable react-hooks/exhaustive-deps, @typescript-eslint/no-explicit-any */
 'use client';
 
 import { Search, X } from 'lucide-react';
@@ -13,7 +13,6 @@ import {
 } from '@/lib/db.client';
 import { SearchResult } from '@/lib/types';
 
-import AggregateCard from '@/components/AggregateCard';
 import PageLayout from '@/components/PageLayout';
 import VideoCard from '@/components/VideoCard';
 
@@ -29,11 +28,12 @@ function SearchPageClient() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
 
   // 视图模式：聚合(agg) 或 全部(all)，默认值由环境变量 NEXT_PUBLIC_AGGREGATE_SEARCH_RESULT 决定
+  const defaultAggregate =
+    typeof window !== 'undefined' &&
+    Boolean((window as any).RUNTIME_CONFIG?.AGGREGATE_SEARCH_RESULT);
+
   const [viewMode, setViewMode] = useState<'agg' | 'all'>(
-    process.env.NEXT_PUBLIC_AGGREGATE_SEARCH_RESULT === 'false' ||
-      process.env.NEXT_PUBLIC_AGGREGATE_SEARCH_RESULT === '0'
-      ? 'all'
-      : 'agg'
+    defaultAggregate ? 'agg' : 'all'
   );
 
   // 聚合后的结果（按标题和年份分组）
@@ -49,6 +49,14 @@ function SearchPageClient() {
       map.set(key, arr);
     });
     return Array.from(map.entries()).sort((a, b) => {
+      // 优先排序：标题与搜索词完全一致的排在前面
+      const aExactMatch = a[1][0].title === searchQuery.trim();
+      const bExactMatch = b[1][0].title === searchQuery.trim();
+
+      if (aExactMatch && !bExactMatch) return -1;
+      if (!aExactMatch && bExactMatch) return 1;
+
+      // 如果都匹配或都不匹配，则按原来的逻辑排序
       return a[1][0].year === b[1][0].year
         ? a[0].localeCompare(b[0])
         : a[1][0].year > b[1][0].year
@@ -89,6 +97,14 @@ function SearchPageClient() {
       const data = await response.json();
       setSearchResults(
         data.results.sort((a: SearchResult, b: SearchResult) => {
+          // 优先排序：标题与搜索词完全一致的排在前面
+          const aExactMatch = a.title === query.trim();
+          const bExactMatch = b.title === query.trim();
+
+          if (aExactMatch && !bExactMatch) return -1;
+          if (!aExactMatch && bExactMatch) return 1;
+
+          // 如果都匹配或都不匹配，则按原来的逻辑排序
           return a.year === b.year
             ? a.title.localeCompare(b.title)
             : a.year > b.year
@@ -126,69 +142,73 @@ function SearchPageClient() {
   };
 
   return (
-    <PageLayout activePath='/search'>
-      <div className='px-4 sm:px-10 py-4 sm:py-8 overflow-visible mb-10'>
+    <PageLayout activePath="/search">
+      <div className="mb-10 overflow-visible px-4 py-4 sm:px-10 sm:py-8">
         {/* 搜索框 */}
-        <div className='mb-8'>
-          <form onSubmit={handleSearch} className='max-w-2xl mx-auto'>
-            <div className='relative'>
-              <Search className='absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400 dark:text-gray-500' />
+        <div className="mb-8">
+          <form onSubmit={handleSearch} className="mx-auto max-w-2xl">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
               <input
-                id='searchInput'
-                type='text'
+                id="searchInput"
+                type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder='搜索电影、电视剧...'
-                className='w-full h-12 rounded-lg bg-gray-50/80 py-3 pl-10 pr-4 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-400 focus:bg-white border border-gray-200/50 shadow-sm dark:bg-gray-800 dark:text-gray-300 dark:placeholder-gray-500 dark:focus:bg-gray-700 dark:border-gray-700'
+                placeholder="搜索电影、电视剧..."
+                className="h-12 w-full rounded-lg border border-gray-200/50 bg-gray-50/80 py-3 pl-10 pr-4 text-sm text-gray-700 placeholder-gray-400 shadow-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-green-400 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:placeholder-gray-500 dark:focus:bg-gray-700"
               />
             </div>
           </form>
         </div>
 
         {/* 搜索结果或搜索历史 */}
-        <div className='max-w-[95%] mx-auto mt-12 overflow-visible'>
+        <div className="mx-auto mt-12 max-w-[95%] overflow-visible">
           {isLoading ? (
-            <div className='flex justify-center items-center h-40'>
-              <div className='animate-spin rounded-full h-8 w-8 border-b-2 border-green-500'></div>
+            <div className="flex h-40 items-center justify-center">
+              <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-green-500"></div>
             </div>
           ) : showResults ? (
-            <section className='mb-12'>
+            <section className="mb-12">
               {/* 标题 + 聚合开关 */}
-              <div className='mb-8 flex items-center justify-between'>
-                <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
+              <div className="mb-8 flex items-center justify-between">
+                <h2 className="text-xl font-bold text-gray-800 dark:text-gray-200">
                   搜索结果
                 </h2>
                 {/* 聚合开关 */}
-                <label className='flex items-center gap-2 cursor-pointer select-none'>
-                  <span className='text-sm text-gray-700 dark:text-gray-300'>
+                <label className="flex cursor-pointer select-none items-center gap-2">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">
                     聚合
                   </span>
-                  <div className='relative'>
+                  <div className="relative">
                     <input
-                      type='checkbox'
-                      className='sr-only peer'
+                      type="checkbox"
+                      className="peer sr-only"
                       checked={viewMode === 'agg'}
                       onChange={() =>
                         setViewMode(viewMode === 'agg' ? 'all' : 'agg')
                       }
                     />
-                    <div className='w-9 h-5 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
-                    <div className='absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4'></div>
+                    <div className="h-5 w-9 rounded-full bg-gray-300 transition-colors peer-checked:bg-green-500 dark:bg-gray-600"></div>
+                    <div className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4"></div>
                   </div>
                 </label>
               </div>
               <div
                 key={`search-results-${viewMode}`}
-                className='justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8'
+                className="grid grid-cols-3 justify-start gap-x-2 gap-y-14 px-0 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8 sm:gap-y-20 sm:px-2"
               >
                 {viewMode === 'agg'
                   ? aggregatedResults.map(([mapKey, group]) => {
                       return (
-                        <div key={`agg-${mapKey}`} className='w-full'>
-                          <AggregateCard
-                            items={group}
-                            query={searchQuery}
+                        <div key={`agg-${mapKey}`} className="w-full">
+                          <VideoCard
+                            id={group[0].id}
+                            source={group[0].source}
+                            title={group[0].title}
+                            poster={group[0].poster}
+                            source_name={group[0].source_name}
                             year={group[0].year}
+                            items={group}
                           />
                         </div>
                       );
@@ -196,7 +216,7 @@ function SearchPageClient() {
                   : searchResults.map((item) => (
                       <div
                         key={`all-${item.source}-${item.id}`}
-                        className='w-full'
+                        className="w-full"
                       >
                         <VideoCard
                           id={item.id}
@@ -206,12 +226,12 @@ function SearchPageClient() {
                           source={item.source}
                           source_name={item.source_name}
                           douban_id={item.douban_id}
-                          from='search'
+                          from="search"
                         />
                       </div>
                     ))}
                 {searchResults.length === 0 && (
-                  <div className='col-span-full text-center text-gray-500 py-8 dark:text-gray-400'>
+                  <div className="col-span-full py-8 text-center text-gray-500 dark:text-gray-400">
                     未找到相关结果
                   </div>
                 )}
@@ -219,8 +239,8 @@ function SearchPageClient() {
             </section>
           ) : searchHistory.length > 0 ? (
             // 搜索历史
-            <section className='mb-12'>
-              <h2 className='mb-4 text-xl font-bold text-gray-800 text-left dark:text-gray-200'>
+            <section className="mb-12">
+              <h2 className="mb-4 text-left text-xl font-bold text-gray-800 dark:text-gray-200">
                 搜索历史
                 {searchHistory.length > 0 && (
                   <button
@@ -228,15 +248,15 @@ function SearchPageClient() {
                       await clearSearchHistory();
                       setSearchHistory([]);
                     }}
-                    className='ml-3 text-sm text-gray-500 hover:text-red-500 transition-colors dark:text-gray-400 dark:hover:text-red-500'
+                    className="ml-3 text-sm text-gray-500 transition-colors hover:text-red-500 dark:text-gray-400 dark:hover:text-red-500"
                   >
                     清空
                   </button>
                 )}
               </h2>
-              <div className='flex flex-wrap gap-2'>
+              <div className="flex flex-wrap gap-2">
                 {searchHistory.map((item) => (
-                  <div key={item} className='relative group'>
+                  <div key={item} className="group relative">
                     <button
                       onClick={() => {
                         setSearchQuery(item);
@@ -244,13 +264,13 @@ function SearchPageClient() {
                           `/search?q=${encodeURIComponent(item.trim())}`
                         );
                       }}
-                      className='px-4 py-2 bg-gray-500/10 hover:bg-gray-300 rounded-full text-sm text-gray-700 transition-colors duration-200 dark:bg-gray-700/50 dark:hover:bg-gray-600 dark:text-gray-300'
+                      className="rounded-full bg-gray-500/10 px-4 py-2 text-sm text-gray-700 transition-colors duration-200 hover:bg-gray-300 dark:bg-gray-700/50 dark:text-gray-300 dark:hover:bg-gray-600"
                     >
                       {item}
                     </button>
                     {/* 删除按钮 */}
                     <button
-                      aria-label='删除搜索历史'
+                      aria-label="删除搜索历史"
                       onClick={async (e) => {
                         e.stopPropagation();
                         e.preventDefault();
@@ -258,9 +278,9 @@ function SearchPageClient() {
                         const history = await getSearchHistory();
                         setSearchHistory(history);
                       }}
-                      className='absolute -top-1 -right-1 w-4 h-4 opacity-0 group-hover:opacity-100 bg-gray-400 hover:bg-red-500 text-white rounded-full flex items-center justify-center text-[10px] transition-colors'
+                      className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-gray-400 text-[10px] text-white opacity-0 transition-colors hover:bg-red-500 group-hover:opacity-100"
                     >
-                      <X className='w-3 h-3' />
+                      <X className="h-3 w-3" />
                     </button>
                   </div>
                 ))}
