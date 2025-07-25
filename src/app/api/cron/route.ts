@@ -1,12 +1,45 @@
 /* eslint-disable no-console */
 
-import { db } from '@/lib/db';
-import { type VideoDetail, fetchVideoDetail } from '@/lib/fetchVideoDetail';
+import { NextRequest, NextResponse } from 'next/server';
 
-const STORAGE_TYPE = process.env.NEXT_PUBLIC_STORAGE_TYPE ?? 'localstorage';
+import { db } from '@/lib/db';
+import { fetchVideoDetail } from '@/lib/fetchVideoDetail';
+import { SearchResult } from '@/lib/types';
+
+export const runtime = 'edge';
+
+export async function GET(request: NextRequest) {
+  console.log(request.url);
+  try {
+    console.log('Cron job triggered:', new Date().toISOString());
+
+    refreshRecordAndFavorites();
+
+    return NextResponse.json({
+      success: true,
+      message: 'Cron job executed successfully',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Cron job failed:', error);
+
+    return NextResponse.json(
+      {
+        success: false,
+        message: 'Cron job failed',
+        error: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString(),
+      },
+      { status: 500 }
+    );
+  }
+}
 
 async function refreshRecordAndFavorites() {
-  if (STORAGE_TYPE === 'localstorage') {
+  if (
+    (process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage') === 'localstorage'
+  ) {
+    console.log('跳过刷新：当前使用 localstorage 存储模式');
     return;
   }
 
@@ -16,14 +49,14 @@ async function refreshRecordAndFavorites() {
       users.push(process.env.USERNAME);
     }
     // 函数级缓存：key 为 `${source}+${id}`，值为 Promise<VideoDetail | null>
-    const detailCache = new Map<string, Promise<VideoDetail | null>>();
+    const detailCache = new Map<string, Promise<SearchResult | null>>();
 
     // 获取详情 Promise（带缓存和错误处理）
     const getDetail = async (
       source: string,
       id: string,
       fallbackTitle: string
-    ): Promise<VideoDetail | null> => {
+    ): Promise<SearchResult | null> => {
       const key = `${source}+${id}`;
       let promise = detailCache.get(key);
       if (!promise) {
@@ -72,14 +105,16 @@ async function refreshRecordAndFavorites() {
             const episodeCount = detail.episodes?.length || 0;
             if (episodeCount > 0 && episodeCount !== record.total_episodes) {
               await db.savePlayRecord(user, source, id, {
-                title: record.title,
+                title: detail.title || record.title,
                 source_name: record.source_name,
-                cover: record.cover,
+                cover: detail.poster || record.cover,
                 index: record.index,
                 total_episodes: episodeCount,
                 play_time: record.play_time,
+                year: detail.year || record.year,
                 total_time: record.total_time,
                 save_time: record.save_time,
+                search_title: record.search_title,
               });
               console.log(
                 `更新播放记录: ${record.title} (${record.total_episodes} -> ${episodeCount})`
@@ -121,11 +156,13 @@ async function refreshRecordAndFavorites() {
             const favEpisodeCount = favDetail.episodes?.length || 0;
             if (favEpisodeCount > 0 && favEpisodeCount !== fav.total_episodes) {
               await db.saveFavorite(user, source, id, {
-                title: fav.title,
+                title: favDetail.title || fav.title,
                 source_name: fav.source_name,
-                cover: fav.cover,
+                cover: favDetail.poster || fav.cover,
+                year: favDetail.year || fav.year,
                 total_episodes: favEpisodeCount,
                 save_time: fav.save_time,
+                search_title: fav.search_title,
               });
               console.log(
                 `更新收藏: ${fav.title} (${fav.total_episodes} -> ${favEpisodeCount})`
@@ -150,5 +187,3 @@ async function refreshRecordAndFavorites() {
     console.error('刷新播放记录/收藏任务启动失败', err);
   }
 }
-
-export default refreshRecordAndFavorites;

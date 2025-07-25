@@ -23,10 +23,11 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { ChevronDown, ChevronUp, Settings, Users, Video } from 'lucide-react';
 import { GripVertical } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useState } from 'react';
 import Swal from 'sweetalert2';
 
 import { AdminConfig, AdminConfigResult } from '@/lib/admin.types';
+import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 
 import PageLayout from '@/components/PageLayout';
 
@@ -49,7 +50,7 @@ interface SiteConfig {
   Announcement: string;
   SearchDownstreamMaxPage: number;
   SiteInterfaceCacheTime: number;
-  SearchResultDefaultAggregate: boolean;
+  ImageProxy: string;
 }
 
 // 视频源数据类型
@@ -112,14 +113,23 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
     enableRegistration: false,
   });
   const [showAddUserForm, setShowAddUserForm] = useState(false);
+  const [showChangePasswordForm, setShowChangePasswordForm] = useState(false);
   const [newUser, setNewUser] = useState({
+    username: '',
+    password: '',
+  });
+  const [changePasswordUser, setChangePasswordUser] = useState({
     username: '',
     password: '',
   });
 
   // 当前登录用户名
-  const currentUsername =
-    typeof window !== 'undefined' ? localStorage.getItem('username') : null;
+  const currentUsername = getAuthInfoFromBrowserCookie()?.username || null;
+
+  // 检测存储类型是否为 d1
+  const isD1Storage =
+    typeof window !== 'undefined' &&
+    (window as any).RUNTIME_CONFIG?.STORAGE_TYPE === 'd1';
 
   useEffect(() => {
     if (config?.UserConfig) {
@@ -131,15 +141,6 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
 
   // 切换允许注册设置
   const toggleAllowRegister = async (value: boolean) => {
-    const username =
-      typeof window !== 'undefined' ? localStorage.getItem('username') : null;
-    const password =
-      typeof window !== 'undefined' ? localStorage.getItem('password') : null;
-    if (!username || !password) {
-      showError('无法获取当前用户信息，请重新登录');
-      return;
-    }
-
     try {
       // 先更新本地 UI
       setUserSettings((prev) => ({ ...prev, enableRegistration: value }));
@@ -148,8 +149,6 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          username,
-          password,
           action: 'setAllowRegister',
           allowRegister: value,
         }),
@@ -191,29 +190,57 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
     setShowAddUserForm(false);
   };
 
+  const handleChangePassword = async () => {
+    if (!changePasswordUser.username || !changePasswordUser.password) return;
+    await handleUserAction(
+      'changePassword',
+      changePasswordUser.username,
+      changePasswordUser.password
+    );
+    setChangePasswordUser({ username: '', password: '' });
+    setShowChangePasswordForm(false);
+  };
+
+  const handleShowChangePasswordForm = (username: string) => {
+    setChangePasswordUser({ username, password: '' });
+    setShowChangePasswordForm(true);
+    setShowAddUserForm(false); // 关闭添加用户表单
+  };
+
+  const handleDeleteUser = async (username: string) => {
+    const { isConfirmed } = await Swal.fire({
+      title: '确认删除用户',
+      text: `删除用户 ${username} 将同时删除其搜索历史、播放记录和收藏夹，此操作不可恢复！`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: '确认删除',
+      cancelButtonText: '取消',
+      confirmButtonColor: '#dc2626',
+    });
+
+    if (!isConfirmed) return;
+
+    await handleUserAction('deleteUser', username);
+  };
+
   // 通用请求函数
   const handleUserAction = async (
-    action: 'add' | 'ban' | 'unban' | 'setAdmin' | 'cancelAdmin',
+    action:
+      | 'add'
+      | 'ban'
+      | 'unban'
+      | 'setAdmin'
+      | 'cancelAdmin'
+      | 'changePassword'
+      | 'deleteUser',
     targetUsername: string,
     targetPassword?: string
   ) => {
-    const username =
-      typeof window !== 'undefined' ? localStorage.getItem('username') : null;
-    const password =
-      typeof window !== 'undefined' ? localStorage.getItem('password') : null;
-
-    if (!username || !password) {
-      showError('无法获取当前用户信息，请重新登录');
-      return;
-    }
-
     try {
       const res = await fetch('/api/admin/user', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          username,
-          password,
           targetUsername,
           ...(targetPassword ? { targetPassword } : {}),
           action,
@@ -263,18 +290,29 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
           注册设置
         </h4>
         <div className="flex items-center justify-between">
-          <label className="text-gray-700 dark:text-gray-300">
+          <label
+            className={`text-gray-700 dark:text-gray-300 ${
+              isD1Storage ? 'opacity-50' : ''
+            }`}
+          >
             允许新用户注册
+            {isD1Storage && (
+              <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
+                (D1 环境下不可修改)
+              </span>
+            )}
           </label>
           <button
             onClick={() =>
+              !isD1Storage &&
               toggleAllowRegister(!userSettings.enableRegistration)
             }
+            disabled={isD1Storage}
             className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${
               userSettings.enableRegistration
                 ? 'bg-green-600'
                 : 'bg-gray-200 dark:bg-gray-700'
-            }`}
+            } ${isD1Storage ? 'cursor-not-allowed opacity-50' : ''}`}
           >
             <span
               className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
@@ -294,7 +332,13 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
             用户列表
           </h4>
           <button
-            onClick={() => setShowAddUserForm(!showAddUserForm)}
+            onClick={() => {
+              setShowAddUserForm(!showAddUserForm);
+              if (showChangePasswordForm) {
+                setShowChangePasswordForm(false);
+                setChangePasswordUser({ username: '', password: '' });
+              }
+            }}
             className="rounded-lg bg-green-600 px-3 py-1 text-sm text-white transition-colors hover:bg-green-700"
           >
             {showAddUserForm ? '取消' : '添加用户'}
@@ -329,6 +373,52 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                 className="w-full rounded-lg bg-green-600 px-4 py-2 text-white transition-colors hover:bg-green-700 disabled:bg-gray-400 sm:w-auto"
               >
                 添加
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 修改密码表单 */}
+        {showChangePasswordForm && (
+          <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-700 dark:bg-blue-900/20">
+            <h5 className="mb-3 text-sm font-medium text-blue-800 dark:text-blue-300">
+              修改用户密码
+            </h5>
+            <div className="flex flex-col gap-4 sm:flex-row sm:gap-3">
+              <input
+                type="text"
+                placeholder="用户名"
+                value={changePasswordUser.username}
+                disabled
+                className="flex-1 cursor-not-allowed rounded-lg border border-gray-300 bg-gray-100 px-3 py-2 text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
+              />
+              <input
+                type="password"
+                placeholder="新密码"
+                value={changePasswordUser.password}
+                onChange={(e) =>
+                  setChangePasswordUser((prev) => ({
+                    ...prev,
+                    password: e.target.value,
+                  }))
+                }
+                className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-transparent focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+              />
+              <button
+                onClick={handleChangePassword}
+                disabled={!changePasswordUser.password}
+                className="w-full rounded-lg bg-blue-600 px-4 py-2 text-white transition-colors hover:bg-blue-700 disabled:bg-gray-400 sm:w-auto"
+              >
+                修改密码
+              </button>
+              <button
+                onClick={() => {
+                  setShowChangePasswordForm(false);
+                  setChangePasswordUser({ username: '', password: '' });
+                }}
+                className="w-full rounded-lg bg-gray-600 px-4 py-2 text-white transition-colors hover:bg-gray-700 sm:w-auto"
+              >
+                取消
               </button>
             </div>
           </div>
@@ -380,6 +470,21 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
               return (
                 <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                   {sortedUsers.map((user) => {
+                    // 修改密码权限：站长可修改管理员和普通用户密码，管理员可修改普通用户和自己的密码，但任何人都不能修改站长密码
+                    const canChangePassword =
+                      user.role !== 'owner' && // 不能修改站长密码
+                      (role === 'owner' || // 站长可以修改管理员和普通用户密码
+                        (role === 'admin' &&
+                          (user.role === 'user' ||
+                            user.username === currentUsername))); // 管理员可以修改普通用户和自己的密码
+
+                    // 删除用户权限：站长可删除除自己外的所有用户，管理员仅可删除普通用户
+                    const canDeleteUser =
+                      user.username !== currentUsername &&
+                      (role === 'owner' || // 站长可以删除除自己外的所有用户
+                        (role === 'admin' && user.role === 'user')); // 管理员仅可删除普通用户
+
+                    // 其他操作权限：不能操作自己，站长可操作所有用户，管理员可操作普通用户
                     const canOperate =
                       user.username !== currentUsername &&
                       (role === 'owner' ||
@@ -421,8 +526,20 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                           </span>
                         </td>
                         <td className="space-x-2 whitespace-nowrap px-6 py-4 text-right text-sm font-medium">
+                          {/* 修改密码按钮 */}
+                          {canChangePassword && (
+                            <button
+                              onClick={() =>
+                                handleShowChangePasswordForm(user.username)
+                              }
+                              className="inline-flex items-center rounded-full bg-blue-100 px-3 py-1.5 text-xs font-medium text-blue-800 transition-colors hover:bg-blue-200 dark:bg-blue-900/40 dark:text-blue-200 dark:hover:bg-blue-900/60"
+                            >
+                              修改密码
+                            </button>
+                          )}
                           {canOperate && (
                             <>
+                              {/* 其他操作按钮 */}
                               {user.role === 'user' && (
                                 <button
                                   onClick={() => handleSetAdmin(user.username)}
@@ -460,6 +577,15 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                                   </button>
                                 ))}
                             </>
+                          )}
+                          {/* 删除用户按钮 - 放在最后，使用更明显的红色样式 */}
+                          {canDeleteUser && (
+                            <button
+                              onClick={() => handleDeleteUser(user.username)}
+                              className="inline-flex items-center rounded-full bg-red-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-700 dark:bg-red-600 dark:hover:bg-red-700"
+                            >
+                              删除用户
+                            </button>
                           )}
                         </td>
                       </tr>
@@ -521,21 +647,11 @@ const VideoSourceConfig = ({
 
   // 通用 API 请求
   const callSourceApi = async (body: Record<string, any>) => {
-    const username =
-      typeof window !== 'undefined' ? localStorage.getItem('username') : null;
-    const password =
-      typeof window !== 'undefined' ? localStorage.getItem('password') : null;
-
-    if (!username || !password) {
-      showError('无法获取当前用户信息，请重新登录');
-      throw new Error('no-credential');
-    }
-
     try {
       const resp = await fetch('/api/admin/source', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password, ...body }),
+        body: JSON.stringify({ ...body }),
       });
 
       if (!resp.ok) {
@@ -832,39 +948,33 @@ const SiteConfigComponent = ({ config }: { config: AdminConfig | null }) => {
     Announcement: '',
     SearchDownstreamMaxPage: 1,
     SiteInterfaceCacheTime: 7200,
-    SearchResultDefaultAggregate: false,
+    ImageProxy: '',
   });
   // 保存状态
   const [saving, setSaving] = useState(false);
 
+  // 检测存储类型是否为 d1
+  const isD1Storage =
+    typeof window !== 'undefined' &&
+    (window as any).RUNTIME_CONFIG?.STORAGE_TYPE === 'd1';
+
   useEffect(() => {
     if (config?.SiteConfig) {
-      setSiteSettings(config.SiteConfig);
+      setSiteSettings({
+        ...config.SiteConfig,
+        ImageProxy: config.SiteConfig.ImageProxy || '',
+      });
     }
   }, [config]);
 
   // 保存站点配置
   const handleSave = async () => {
-    const username =
-      typeof window !== 'undefined' ? localStorage.getItem('username') : null;
-    if (!username) {
-      showError('无法获取用户名，请重新登录');
-      return;
-    }
-
-    const password =
-      typeof window !== 'undefined' ? localStorage.getItem('password') : null;
-    if (!password) {
-      showError('无法获取密码，请重新登录');
-      return;
-    }
-
     try {
       setSaving(true);
       const resp = await fetch('/api/admin/site', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password, ...siteSettings }),
+        body: JSON.stringify({ ...siteSettings }),
       });
 
       if (!resp.ok) {
@@ -892,34 +1002,60 @@ const SiteConfigComponent = ({ config }: { config: AdminConfig | null }) => {
     <div className="space-y-6">
       {/* 站点名称 */}
       <div>
-        <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+        <label
+          className={`mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300 ${
+            isD1Storage ? 'opacity-50' : ''
+          }`}
+        >
           站点名称
+          {isD1Storage && (
+            <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
+              (D1 环境下不可修改)
+            </span>
+          )}
         </label>
         <input
           type="text"
           value={siteSettings.SiteName}
           onChange={(e) =>
+            !isD1Storage &&
             setSiteSettings((prev) => ({ ...prev, SiteName: e.target.value }))
           }
-          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-transparent focus:ring-2 focus:ring-green-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+          disabled={isD1Storage}
+          className={`w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-transparent focus:ring-2 focus:ring-green-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 ${
+            isD1Storage ? 'cursor-not-allowed opacity-50' : ''
+          }`}
         />
       </div>
 
       {/* 站点公告 */}
       <div>
-        <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+        <label
+          className={`mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300 ${
+            isD1Storage ? 'opacity-50' : ''
+          }`}
+        >
           站点公告
+          {isD1Storage && (
+            <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
+              (D1 环境下不可修改)
+            </span>
+          )}
         </label>
         <textarea
           value={siteSettings.Announcement}
           onChange={(e) =>
+            !isD1Storage &&
             setSiteSettings((prev) => ({
               ...prev,
               Announcement: e.target.value,
             }))
           }
+          disabled={isD1Storage}
           rows={3}
-          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-transparent focus:ring-2 focus:ring-green-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+          className={`w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-transparent focus:ring-2 focus:ring-green-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 ${
+            isD1Storage ? 'cursor-not-allowed opacity-50' : ''
+          }`}
         />
       </div>
 
@@ -961,41 +1097,50 @@ const SiteConfigComponent = ({ config }: { config: AdminConfig | null }) => {
         />
       </div>
 
-      {/* 默认按标题和年份聚合 */}
-      <div className="flex items-center justify-between">
-        <label className="text-gray-700 dark:text-gray-300">
-          搜索结果默认按标题和年份聚合
-        </label>
-        <button
-          onClick={() =>
-            setSiteSettings((prev) => ({
-              ...prev,
-              SearchResultDefaultAggregate: !prev.SearchResultDefaultAggregate,
-            }))
-          }
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${
-            siteSettings.SearchResultDefaultAggregate
-              ? 'bg-green-600'
-              : 'bg-gray-200 dark:bg-gray-700'
+      {/* 图片代理 */}
+      <div>
+        <label
+          className={`mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300 ${
+            isD1Storage ? 'opacity-50' : ''
           }`}
         >
-          <span
-            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-              siteSettings.SearchResultDefaultAggregate
-                ? 'translate-x-6'
-                : 'translate-x-1'
-            }`}
-          />
-        </button>
+          图片代理前缀
+          {isD1Storage && (
+            <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
+              (D1 环境下不可修改)
+            </span>
+          )}
+        </label>
+        <input
+          type="text"
+          placeholder="例如: https://imageproxy.example.com/?url="
+          value={siteSettings.ImageProxy}
+          onChange={(e) =>
+            !isD1Storage &&
+            setSiteSettings((prev) => ({
+              ...prev,
+              ImageProxy: e.target.value,
+            }))
+          }
+          disabled={isD1Storage}
+          className={`w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-transparent focus:ring-2 focus:ring-green-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 ${
+            isD1Storage ? 'cursor-not-allowed opacity-50' : ''
+          }`}
+        />
+        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          用于代理图片访问，解决跨域或访问限制问题。留空则不使用代理。
+        </p>
       </div>
 
       {/* 操作按钮 */}
       <div className="flex justify-end">
         <button
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || isD1Storage}
           className={`px-4 py-2 ${
-            saving ? 'bg-gray-400' : 'bg-green-600 hover:bg-green-700'
+            saving || isD1Storage
+              ? 'cursor-not-allowed bg-gray-400'
+              : 'bg-green-600 hover:bg-green-700'
           } rounded-lg text-white transition-colors`}
         >
           {saving ? '保存中…' : '保存'}
@@ -1005,7 +1150,7 @@ const SiteConfigComponent = ({ config }: { config: AdminConfig | null }) => {
   );
 };
 
-export default function AdminPage() {
+function AdminPageClient() {
   const [config, setConfig] = useState<AdminConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1024,12 +1169,7 @@ export default function AdminPage() {
         setLoading(true);
       }
 
-      const username = localStorage.getItem('username');
-      const response = await fetch(
-        `/api/admin/config${
-          username ? `?username=${encodeURIComponent(username)}` : ''
-        }`
-      );
+      const response = await fetch(`/api/admin/config`);
 
       if (!response.ok) {
         const data = (await response.json()) as any;
@@ -1065,11 +1205,6 @@ export default function AdminPage() {
 
   // 新增: 重置配置处理函数
   const handleResetConfig = async () => {
-    const username = localStorage.getItem('username');
-    if (!username) {
-      showError('无法获取用户名，请重新登录');
-      return;
-    }
     const { isConfirmed } = await Swal.fire({
       title: '确认重置配置',
       text: '此操作将重置用户封禁和管理员设置、自定义视频源，站点配置将重置为默认值，是否继续？',
@@ -1080,22 +1215,8 @@ export default function AdminPage() {
     });
     if (!isConfirmed) return;
 
-    const password = localStorage.getItem('password');
-    if (!password) {
-      showError('无法获取密码，请重新登录');
-      return;
-    }
-
     try {
-      const response = await fetch(
-        `/api/admin/reset${
-          username
-            ? `?username=${encodeURIComponent(
-                username
-              )}&password=${encodeURIComponent(password)}`
-            : ''
-        }`
-      );
+      const response = await fetch(`/api/admin/reset`);
       if (!response.ok) {
         throw new Error(`重置失败: ${response.status}`);
       }
@@ -1198,5 +1319,13 @@ export default function AdminPage() {
         </div>
       </div>
     </PageLayout>
+  );
+}
+
+export default function AdminPage() {
+  return (
+    <Suspense>
+      <AdminPageClient />
+    </Suspense>
   );
 }

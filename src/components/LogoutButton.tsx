@@ -1,33 +1,38 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable no-console */
 
 'use client';
 
 import { LogOut } from 'lucide-react';
+import { useState } from 'react';
 
-/**
- * 退出登录按钮
- *
- * 功能：
- * 1. 清除 localStorage 中保存的 username 和 password
- * 2. 跳转到 /login 页面
- */
-export function LogoutButton() {
-  const handleLogout = () => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('username');
-      localStorage.removeItem('password');
+export const LogoutButton: React.FC = () => {
+  const [loading, setLoading] = useState(false);
+
+  const handleLogout = async () => {
+    if (loading) return;
+
+    setLoading(true);
+
+    try {
+      // 调用注销API来清除cookie
+      await fetch('/api/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+    } catch (error) {
+      console.error('注销请求失败:', error);
     }
-    // 使用 replace，避免用户返回上一页时仍然处于已登录状态
+
     window.location.reload();
   };
 
   return (
     <button
       onClick={handleLogout}
-      className='w-10 h-10 p-2 rounded-full flex items-center justify-center text-gray-600 hover:bg-gray-200/50 dark:text-gray-300 dark:hover:bg-gray-700/50 transition-colors'
-      aria-label='Logout'
+      className="flex h-10 w-10 items-center justify-center rounded-full p-2 text-gray-600 transition-colors hover:bg-gray-200/50 dark:text-gray-300 dark:hover:bg-gray-700/50"
+      aria-label="Logout"
     >
-      <LogOut className='w-full h-full' />
+      <LogOut className="h-full w-full" />
     </button>
   );
-}
+};

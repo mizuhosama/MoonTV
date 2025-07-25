@@ -1,102 +1,51 @@
-import { Heart, Link as LinkIcon } from 'lucide-react';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+import { CheckCircle, Heart, Link, PlayCircleIcon } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { deletePlayRecord, isFavorited, toggleFavorite } from '@/lib/db.client';
+import {
+  deleteFavorite,
+  deletePlayRecord,
+  generateStorageKey,
+  isFavorited,
+  saveFavorite,
+  subscribeToDataUpdates,
+} from '@/lib/db.client';
+import { SearchResult } from '@/lib/types';
+import { processImageUrl } from '@/lib/utils';
 
 import { ImagePlaceholder } from '@/components/ImagePlaceholder';
 
-// 聚合卡需要的基本字段，与搜索接口保持一致
-interface SearchResult {
-  id: string;
-  title: string;
-  poster: string;
-  source: string;
-  source_name: string;
-  douban_id?: number;
-  episodes: string[];
-}
-
 interface VideoCardProps {
-  id: string;
-  source: string;
-  title: string;
-  poster: string;
+  id?: string;
+  source?: string;
+  title?: string;
+  query?: string;
+  poster?: string;
   episodes?: number;
-  source_name: string;
+  source_name?: string;
   progress?: number;
   year?: string;
-  from?: string;
+  from: 'playrecord' | 'favorite' | 'search' | 'douban';
   currentEpisode?: number;
-  douban_id?: number;
+  douban_id?: string;
   onDelete?: () => void;
-
-  // 可选属性，根据存在与否决定卡片行为
-  rate?: string; // 如果存在，按demo卡片处理
-  items?: SearchResult[]; // 如果存在，按aggregate卡片处理
-}
-
-function CheckCircleCustom() {
-  return (
-    <span className="inline-flex items-center justify-center">
-      <svg
-        width="24"
-        height="24"
-        viewBox="0 0 32 32"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        <circle cx="16" cy="16" r="13" stroke="white" strokeWidth="2" />
-        <path
-          d="M11 16.5L15 20L21 13.5"
-          stroke="white"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </span>
-  );
-}
-
-function PlayCircleSolid({
-  className = '',
-  fillColor = 'none',
-}: {
-  className?: string;
-  fillColor?: string;
-}) {
-  return (
-    <svg
-      width="44"
-      height="44"
-      viewBox="0 0 44 44"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className={`${className} relative block`}
-    >
-      <circle
-        cx="22"
-        cy="22"
-        r="20"
-        stroke="white"
-        strokeWidth="1.5"
-        fill={fillColor}
-      />
-      <polygon points="19,15 19,29 29,22" fill="white" />
-    </svg>
-  );
+  rate?: string;
+  items?: SearchResult[];
+  type?: string;
 }
 
 export default function VideoCard({
   id,
-  title,
-  poster,
+  title = '',
+  query = '',
+  poster = '',
   episodes,
   source,
   source_name,
-  progress,
+  progress = 0,
   year,
   from,
   currentEpisode,
@@ -104,332 +53,338 @@ export default function VideoCard({
   onDelete,
   rate,
   items,
+  type = '',
 }: VideoCardProps) {
-  const [playHover, setPlayHover] = useState(false);
-  const [favorited, setFavorited] = useState(false);
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
   const router = useRouter();
+  const [favorited, setFavorited] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
-  // 判断卡片类型
-  const isDemo = !!rate;
-  const isAggregate = !!items && items.length > 0;
-  const isStandard = !isDemo && !isAggregate;
+  const isAggregate = from === 'search' && !!items?.length;
 
-  // 处理聚合卡片的逻辑
   const aggregateData = useMemo(() => {
-    if (!isAggregate) {
-      return null;
-    }
-
-    const first = items[0];
-
-    // 统计出现次数最多的（非 0） douban_id
-    const countMap = new Map<number, number>();
+    if (!isAggregate || !items) return null;
+    const countMap = new Map<string | number, number>();
+    const episodeCountMap = new Map<number, number>();
     items.forEach((item) => {
       if (item.douban_id && item.douban_id !== 0) {
         countMap.set(item.douban_id, (countMap.get(item.douban_id) || 0) + 1);
       }
-    });
-
-    let mostFrequentDoubanId: number | undefined;
-    let maxCount = 0;
-    countMap.forEach((cnt, id) => {
-      if (cnt > maxCount) {
-        maxCount = cnt;
-        mostFrequentDoubanId = id;
-      }
-    });
-
-    // 统计最频繁的集数
-    const episodeCountMap = new Map<number, number>();
-    items.forEach((item) => {
       const len = item.episodes?.length || 0;
       if (len > 0) {
         episodeCountMap.set(len, (episodeCountMap.get(len) || 0) + 1);
       }
     });
 
-    let mostFrequentEpisodes = 0;
-    let maxEpisodeCount = 0;
-    episodeCountMap.forEach((cnt, len) => {
-      if (cnt > maxEpisodeCount) {
-        maxEpisodeCount = cnt;
-        mostFrequentEpisodes = len;
-      }
-    });
+    const getMostFrequent = <T extends string | number>(
+      map: Map<T, number>
+    ) => {
+      let maxCount = 0;
+      let result: T | undefined;
+      map.forEach((cnt, key) => {
+        if (cnt > maxCount) {
+          maxCount = cnt;
+          result = key;
+        }
+      });
+      return result;
+    };
 
     return {
-      first,
-      mostFrequentDoubanId,
-      mostFrequentEpisodes,
+      first: items[0],
+      mostFrequentDoubanId: getMostFrequent(countMap),
+      mostFrequentEpisodes: getMostFrequent(episodeCountMap) || 0,
     };
   }, [isAggregate, items]);
 
-  // 根据卡片类型决定实际使用的数据
-  const actualTitle =
-    isAggregate && aggregateData ? aggregateData.first.title : title;
-  const actualPoster =
-    isAggregate && aggregateData ? aggregateData.first.poster : poster;
-  const actualSource =
-    isAggregate && aggregateData ? aggregateData.first.source : source;
-  const actualId = isAggregate && aggregateData ? aggregateData.first.id : id;
-  const actualDoubanId =
-    isAggregate && aggregateData
-      ? aggregateData.mostFrequentDoubanId
-      : douban_id;
-  const actualEpisodes =
-    isAggregate && aggregateData
-      ? aggregateData.mostFrequentEpisodes
-      : episodes;
+  const actualTitle = aggregateData?.first.title ?? title;
+  const actualPoster = aggregateData?.first.poster ?? poster;
+  const actualSource = aggregateData?.first.source ?? source;
+  const actualId = aggregateData?.first.id ?? id;
+  const actualDoubanId = String(
+    aggregateData?.mostFrequentDoubanId ?? douban_id
+  );
+  const actualEpisodes = aggregateData?.mostFrequentEpisodes ?? episodes;
+  const actualYear = aggregateData?.first.year ?? year;
+  const actualQuery = query || '';
+  const actualSearchType = isAggregate
+    ? aggregateData?.first.episodes?.length === 1
+      ? 'movie'
+      : 'tv'
+    : type;
 
-  // 检查初始收藏状态（仅标准卡片）
+  // 获取收藏状态
   useEffect(() => {
-    if (!isStandard) return;
+    if (from === 'douban' || !actualSource || !actualId) return;
 
-    (async () => {
+    const fetchFavoriteStatus = async () => {
       try {
         const fav = await isFavorited(actualSource, actualId);
         setFavorited(fav);
       } catch (err) {
         throw new Error('检查收藏状态失败');
       }
-    })();
-  }, [isStandard, actualSource, actualId]);
+    };
 
-  // 切换收藏状态（仅标准卡片）
-  const handleToggleFavorite = async (
-    e: React.MouseEvent<HTMLSpanElement | SVGElement, MouseEvent>
-  ) => {
-    e.preventDefault();
-    e.stopPropagation();
+    fetchFavoriteStatus();
 
-    if (!isStandard) return;
-
-    try {
-      const newState = await toggleFavorite(actualSource, actualId, {
-        title: actualTitle,
-        source_name,
-        year: year || '',
-        cover: actualPoster,
-        total_episodes: actualEpisodes ?? 1,
-        save_time: Date.now(),
-      });
-      setFavorited(newState);
-    } catch (err) {
-      // 如果删除失败且是收藏夹，恢复显示
-      if (isDeleting) {
-        setIsDeleting(false);
+    // 监听收藏状态更新事件
+    const storageKey = generateStorageKey(actualSource, actualId);
+    const unsubscribe = subscribeToDataUpdates(
+      'favoritesUpdated',
+      (newFavorites: Record<string, any>) => {
+        // 检查当前项目是否在新的收藏列表中
+        const isNowFavorited = !!newFavorites[storageKey];
+        setFavorited(isNowFavorited);
       }
-      throw new Error('切换收藏状态失败');
-    }
-  };
+    );
 
-  // 删除对应播放记录（仅标准卡片）
-  const handleDeleteRecord = async (
-    e: React.MouseEvent<HTMLSpanElement | SVGElement, MouseEvent>
-  ) => {
-    e.preventDefault();
-    e.stopPropagation();
+    return unsubscribe;
+  }, [from, actualSource, actualId]);
 
-    if (!isStandard) return;
+  const handleToggleFavorite = useCallback(
+    async (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (from === 'douban' || !actualSource || !actualId) return;
+      try {
+        if (favorited) {
+          // 如果已收藏，删除收藏
+          await deleteFavorite(actualSource, actualId);
+          setFavorited(false);
+        } else {
+          // 如果未收藏，添加收藏
+          await saveFavorite(actualSource, actualId, {
+            title: actualTitle,
+            source_name: source_name || '',
+            year: actualYear || '',
+            cover: actualPoster,
+            total_episodes: actualEpisodes ?? 1,
+            save_time: Date.now(),
+          });
+          setFavorited(true);
+        }
+      } catch (err) {
+        throw new Error('切换收藏状态失败');
+      }
+    },
+    [
+      from,
+      actualSource,
+      actualId,
+      actualTitle,
+      source_name,
+      actualYear,
+      actualPoster,
+      actualEpisodes,
+      favorited,
+    ]
+  );
 
-    try {
-      await deletePlayRecord(actualSource, actualId);
-      onDelete?.();
-    } catch (err) {
-      throw new Error('删除播放记录失败');
-    }
-  };
+  const handleDeleteRecord = useCallback(
+    async (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (from !== 'playrecord' || !actualSource || !actualId) return;
+      try {
+        await deletePlayRecord(actualSource, actualId);
+        onDelete?.();
+      } catch (err) {
+        throw new Error('删除播放记录失败');
+      }
+    },
+    [from, actualSource, actualId, onDelete]
+  );
 
-  // 点击处理逻辑
-  const handleClick = () => {
-    if (isDemo) {
-      router.push(`/play?title=${encodeURIComponent(actualTitle.trim())}`);
-    } else {
+  const handleClick = useCallback(() => {
+    if (from === 'douban') {
+      router.push(
+        `/play?title=${encodeURIComponent(actualTitle.trim())}${
+          actualYear ? `&year=${actualYear}` : ''
+        }${actualSearchType ? `&stype=${actualSearchType}` : ''}`
+      );
+    } else if (actualSource && actualId) {
       router.push(
         `/play?source=${actualSource}&id=${actualId}&title=${encodeURIComponent(
-          actualTitle.trim()
-        )}${year ? `&year=${year}` : ''}`
+          actualTitle
+        )}${actualYear ? `&year=${actualYear}` : ''}${
+          isAggregate ? '&prefer=true' : ''
+        }${
+          actualQuery ? `&stitle=${encodeURIComponent(actualQuery.trim())}` : ''
+        }${actualSearchType ? `&stype=${actualSearchType}` : ''}`
       );
     }
-  };
+  }, [
+    from,
+    actualSource,
+    actualId,
+    router,
+    actualTitle,
+    actualYear,
+    isAggregate,
+    actualQuery,
+    actualSearchType,
+  ]);
 
-  // 播放按钮点击处理
-  const handlePlayClick = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    handleClick();
-  };
-
-  const hideCheckCircle =
-    from === 'favorites' || from === 'search' || !isStandard;
-  const alwaysShowHeart = from !== 'favorites' && isStandard;
-  const showHoverLayer = isStandard
-    ? alwaysShowHeart
-      ? 'opacity-50 group-hover:opacity-100'
-      : 'opacity-0 group-hover:opacity-100'
-    : 'opacity-0 group-hover:opacity-100';
+  const config = useMemo(() => {
+    const configs = {
+      playrecord: {
+        showSourceName: true,
+        showProgress: true,
+        showPlayButton: true,
+        showHeart: true,
+        showCheckCircle: true,
+        showDoubanLink: false,
+        showRating: false,
+      },
+      favorite: {
+        showSourceName: true,
+        showProgress: false,
+        showPlayButton: true,
+        showHeart: true,
+        showCheckCircle: false,
+        showDoubanLink: false,
+        showRating: false,
+      },
+      search: {
+        showSourceName: true,
+        showProgress: false,
+        showPlayButton: true,
+        showHeart: !isAggregate,
+        showCheckCircle: false,
+        showDoubanLink: !!actualDoubanId,
+        showRating: false,
+      },
+      douban: {
+        showSourceName: false,
+        showProgress: false,
+        showPlayButton: true,
+        showHeart: false,
+        showCheckCircle: false,
+        showDoubanLink: true,
+        showRating: !!rate,
+      },
+    };
+    return configs[from] || configs.search;
+  }, [from, isAggregate, actualDoubanId, rate]);
 
   return (
     <div
-      className={`group relative flex w-full cursor-pointer flex-col rounded-lg bg-transparent transition-all duration-300 ease-in-out ${
-        isDeleting ? 'scale-90 opacity-0' : ''
-      } ${isDemo ? 'group-hover:scale-[1.02]' : ''}`}
+      className="group relative w-full cursor-pointer rounded-lg bg-transparent transition-all duration-300 ease-in-out hover:z-[500] hover:scale-[1.05]"
       onClick={handleClick}
     >
-      {/* 海报图片容器 */}
-      <div className="duration-400 cubic-bezier(0.4,0,0.2,1) relative aspect-[2/3] w-full overflow-hidden rounded-lg transition-all">
-        {/* 图片占位符 - 骨架屏效果 */}
-        <ImagePlaceholder aspectRatio="aspect-[2/3]" />
-
+      {/* 海报容器 */}
+      <div className="relative aspect-[2/3] overflow-hidden rounded-lg">
+        {/* 骨架屏 */}
+        {!isLoading && <ImagePlaceholder aspectRatio="aspect-[2/3]" />}
+        {/* 图片 */}
         <Image
-          src={actualPoster}
+          src={processImageUrl(actualPoster)}
           alt={actualTitle}
           fill
-          className={`cubic-bezier(0.4,0,0.2,1) object-cover transition-transform duration-500 group-hover:scale-110
-                      ${
-                        isLoaded
-                          ? 'scale-100 opacity-100'
-                          : 'scale-95 opacity-0'
-                      }`}
-          onLoadingComplete={() => setIsLoaded(true)}
+          className="object-cover"
           referrerPolicy="no-referrer"
-          priority={false}
+          onLoadingComplete={() => setIsLoading(true)}
         />
-        {/* Hover 效果层 */}
-        <div
-          className={`absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent ${showHoverLayer} cubic-bezier(0.4,0,0.2,1) flex items-center justify-center overflow-hidden transition-all duration-300`}
-        >
-          {/* 播放按钮 */}
-          <div className="pointer-events-auto absolute inset-0 flex items-center justify-center">
-            <div
-              className={`cubic-bezier(0.4,0,0.2,1) transition-all duration-300 ${
-                playHover ? 'scale-100 opacity-100' : 'scale-90 opacity-70'
-              } ${isDemo && playHover ? 'rotate-12 scale-110' : ''}`}
-              style={{ cursor: 'pointer' }}
-              onClick={handlePlayClick}
-              onMouseEnter={() => setPlayHover(true)}
-              onMouseLeave={() => setPlayHover(false)}
-            >
-              <PlayCircleSolid fillColor={playHover ? '#22c55e' : 'none'} />
-            </div>
-          </div>
 
-          {/* 右侧操作按钮组（仅标准卡片） */}
-          {isStandard && (
-            <div className="cubic-bezier(0.4,0,0.2,1) absolute bottom-2 right-2 flex transform items-center gap-3 transition-all duration-300 group-hover:scale-110 sm:bottom-4 sm:right-4">
-              {!hideCheckCircle && (
-                <span
-                  onClick={handleDeleteRecord}
-                  title="标记已看"
-                  className="inline-flex items-center justify-center opacity-70 transition-opacity duration-200 hover:opacity-100"
-                >
-                  <CheckCircleCustom />
-                </span>
-              )}
+        {/* 悬浮遮罩 */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 transition-opacity duration-300 ease-in-out group-hover:opacity-100" />
 
-              <span
-                onClick={handleToggleFavorite}
-                title={favorited ? '移除收藏' : '加入收藏'}
-                className={`inline-flex items-center justify-center ${
-                  alwaysShowHeart ? 'opacity-100' : 'opacity-70'
-                } transition-opacity duration-200 hover:opacity-100`}
-              >
-                <Heart
-                  className={`h-4 w-4 sm:h-5 sm:w-5 ${
-                    favorited ? 'scale-105 text-red-500' : 'text-white/90'
-                  }`}
-                  strokeWidth={2}
-                  fill={favorited ? 'currentColor' : 'none'}
-                />
-              </span>
-            </div>
-          )}
-        </div>
-        {/* 评分徽章（如果有rate字段） */}
-        {rate && (
-          <div className="cubic-bezier(0.4, 0, 0.2, 1) absolute right-2 top-2 flex h-4 w-4 min-w-[1.25rem] transform items-center justify-center rounded-full bg-pink-500 px-1 shadow-md transition-all duration-300 group-hover:rotate-3 group-hover:scale-110 dark:bg-pink-400 sm:h-7 sm:w-7 sm:min-w-[1.5rem]">
-            <span className="text-[0.5rem] font-bold leading-none text-white sm:text-xs">
-              {rate}
-            </span>
+        {/* 播放按钮 */}
+        {config.showPlayButton && (
+          <div className="absolute inset-0 flex items-center justify-center opacity-0 transition-all delay-75 duration-300 ease-in-out group-hover:scale-100 group-hover:opacity-100">
+            <PlayCircleIcon
+              size={50}
+              strokeWidth={0.8}
+              className="fill-transparent text-white transition-all duration-300 ease-out hover:scale-[1.1] hover:fill-green-500"
+            />
           </div>
         )}
 
-        {/* 继续观看 - 集数矩形展示框（标准卡片） */}
-        {isStandard &&
-          actualEpisodes &&
-          actualEpisodes > 1 &&
-          currentEpisode && (
-            <div className="absolute right-2 top-2 flex h-5 min-w-[1.875rem] items-center justify-center rounded-md bg-green-500/90 px-2 text-[0.55rem] shadow-md dark:bg-green-600/90 sm:h-7 sm:min-w-[2.5rem] sm:text-xs">
-              <span className="font-bold leading-none text-white">
-                {currentEpisode}
-                <span className="mx-1 text-white/80">/</span>
-              </span>
-              <span className="font-bold leading-none text-white">
-                {actualEpisodes}
-              </span>
-            </div>
-          )}
+        {/* 操作按钮 */}
+        {(config.showHeart || config.showCheckCircle) && (
+          <div className="absolute bottom-3 right-3 flex translate-y-2 gap-3 opacity-0 transition-all duration-300 ease-in-out group-hover:translate-y-0 group-hover:opacity-100">
+            {config.showCheckCircle && (
+              <CheckCircle
+                onClick={handleDeleteRecord}
+                size={20}
+                className="text-white transition-all duration-300 ease-out hover:scale-[1.1] hover:stroke-green-500"
+              />
+            )}
+            {config.showHeart && (
+              <Heart
+                onClick={handleToggleFavorite}
+                size={20}
+                className={`transition-all duration-300 ease-out ${
+                  favorited
+                    ? 'fill-red-600 stroke-red-600'
+                    : 'fill-transparent stroke-white hover:stroke-red-400'
+                } hover:scale-[1.1]`}
+              />
+            )}
+          </div>
+        )}
 
-        {/* 搜索非聚合/聚合 - 集数圆形展示框 */}
-        {(isStandard || isAggregate) &&
-          actualEpisodes &&
-          actualEpisodes > 1 &&
-          !currentEpisode && (
-            <div className="absolute right-2 top-2 flex h-4 w-4 items-center justify-center rounded-full bg-green-500/90 text-[0.55rem] shadow-md dark:bg-green-600/90 sm:h-7 sm:w-7 sm:text-xs">
-              <span className="font-bold leading-none text-white">
-                {actualEpisodes}
-              </span>
-            </div>
-          )}
+        {/* 徽章 */}
+        {config.showRating && rate && (
+          <div className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-pink-500 text-xs font-bold text-white shadow-md transition-all duration-300 ease-out group-hover:scale-110">
+            {rate}
+          </div>
+        )}
 
-        {/* 豆瓣链接按钮 */}
-        {actualDoubanId &&
-          (isDemo || (isStandard && from === 'search') || isAggregate) && (
-            <a
-              href={`https://movie.douban.com/subject/${actualDoubanId}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="cubic-bezier(0.4,0,0.2,1) absolute left-2 top-2 scale-90 opacity-0 transition-all duration-300 group-hover:scale-100 group-hover:opacity-100"
-            >
-              <div
-                className={`h-4 w-4 rounded-full bg-[#22c55e] sm:h-7 sm:w-7 ${
-                  isDemo ? 'dark:bg-[#16a34a]' : ''
-                } flex items-center justify-center opacity-70 shadow-md transition-all duration-200 ease-in-out hover:scale-110 hover:bg-[#16a34a] hover:opacity-100 ${
-                  isDemo ? 'dark:hover:bg-[#15803d]' : ''
-                }`}
-              >
-                <LinkIcon className="h-4 w-4 text-white" strokeWidth={2} />
-              </div>
-            </a>
-          )}
+        {actualEpisodes && actualEpisodes > 1 && (
+          <div className="absolute right-2 top-2 rounded-md bg-green-500 px-2 py-1 text-xs font-semibold text-white shadow-md transition-all duration-300 ease-out group-hover:scale-110">
+            {currentEpisode
+              ? `${currentEpisode}/${actualEpisodes}`
+              : actualEpisodes}
+          </div>
+        )}
+
+        {/* 豆瓣链接 */}
+        {config.showDoubanLink && actualDoubanId && (
+          <a
+            href={`https://movie.douban.com/subject/${actualDoubanId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="absolute left-2 top-2 -translate-x-2 opacity-0 transition-all delay-100 duration-300 ease-in-out group-hover:translate-x-0 group-hover:opacity-100"
+          >
+            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-green-500 text-xs font-bold text-white shadow-md transition-all duration-300 ease-out hover:scale-[1.1] hover:bg-green-600">
+              <Link size={16} />
+            </div>
+          </a>
+        )}
       </div>
 
-      {/* 播放进度条（仅标准卡片） */}
-      {isStandard && progress !== undefined && (
-        <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+      {/* 进度条 */}
+      {config.showProgress && progress !== undefined && (
+        <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-gray-200">
           <div
-            className="h-full rounded-full bg-[#22c55e] transition-all duration-200"
+            className="h-full bg-green-500 transition-all duration-500 ease-out"
             style={{ width: `${progress}%` }}
           />
         </div>
       )}
 
-      {/* 信息层 */}
-      <span className="duration-400 cubic-bezier(0.4,0,0.2,1) mt-2 block w-full translate-y-1 truncate px-1 text-center text-xs font-semibold text-gray-900 opacity-80 transition-all group-hover:translate-y-[-2px] group-hover:text-green-600 group-hover:opacity-100 dark:text-gray-200 dark:group-hover:text-green-400 sm:text-sm">
-        {actualTitle}
-      </span>
-
-      {/* 来源信息（仅标准卡片） */}
-      {isStandard && actualSource && (
-        <span className="duration-400 cubic-bezier(0.4,0,0.2,1) mt-1 block w-full translate-y-1 px-1 text-center text-[0.5rem] text-gray-500 opacity-80 transition-all group-hover:translate-y-[-2px] group-hover:opacity-100 dark:text-gray-400 sm:text-xs">
-          <span className="inline-block rounded border border-gray-500/60 px-2 py-[1px] dark:border-gray-400/60">
-            {source_name}
+      {/* 标题与来源 */}
+      <div className="mt-2 text-center">
+        <div className="relative">
+          <span className="peer block truncate text-sm font-semibold text-gray-900 transition-colors duration-300 ease-in-out group-hover:text-green-600 dark:text-gray-100 dark:group-hover:text-green-400">
+            {actualTitle}
           </span>
-        </span>
-      )}
+          {/* 自定义 tooltip */}
+          <div className="pointer-events-none invisible absolute bottom-full left-1/2 mb-2 -translate-x-1/2 transform whitespace-nowrap rounded-md bg-gray-800 px-3 py-1 text-xs text-white opacity-0 shadow-lg transition-all delay-100 duration-200 ease-out peer-hover:visible peer-hover:opacity-100">
+            {actualTitle}
+            <div className="absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 transform border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-800"></div>
+          </div>
+        </div>
+        {config.showSourceName && source_name && (
+          <span className="mt-1 block text-xs text-gray-500 dark:text-gray-400">
+            <span className="inline-block rounded border border-gray-500/60 px-2 py-0.5 transition-all duration-300 ease-in-out group-hover:border-green-500/60 group-hover:text-green-600 dark:border-gray-400/60 dark:group-hover:text-green-400">
+              {source_name}
+            </span>
+          </span>
+        )}
+      </div>
     </div>
   );
 }

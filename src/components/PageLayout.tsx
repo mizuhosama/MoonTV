@@ -2,6 +2,7 @@ import { BackButton } from './BackButton';
 import { LogoutButton } from './LogoutButton';
 import MobileBottomNav from './MobileBottomNav';
 import MobileHeader from './MobileHeader';
+import { SettingsButton } from './SettingsButton';
 import Sidebar from './Sidebar';
 import { ThemeToggle } from './ThemeToggle';
 
@@ -34,6 +35,7 @@ const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
 
           {/* 桌面端顶部按钮 */}
           <div className="absolute right-4 top-2 z-20 hidden items-center gap-2 md:flex">
+            <SettingsButton />
             <LogoutButton />
             <ThemeToggle />
           </div>
